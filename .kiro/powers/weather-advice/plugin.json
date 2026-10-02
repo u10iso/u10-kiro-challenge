@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "weather-advice",
+  "version": "1.0.0",
+  "description": "天気予報から今日の服装を日本語40字以内で一言アドバイスする Power。Open-Meteo MCP サーバーで位置検索と天気予報を取得し、WMO コードと降水確率を組み合わせて傘・防寒・軽装を判断する。",
+  "author": {
+    "name": "u10iso"
+  },
+  "keywords": [
+    "weather",
+    "forecast",
+    "outfit",
+    "clothing",
+    "umbrella",
+    "服装",
+    "天気"
+  ]
+}
