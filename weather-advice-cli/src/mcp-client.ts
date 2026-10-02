@@ -91,6 +91,8 @@ export async function fetchWeather(
   const transport = new StdioClientTransport({
     command: config.command,
     args: config.args,
+    // Suppress child-process stderr so the CLI only outputs the advice line.
+    stderr: "ignore",
   });
 
   const client = new Client(

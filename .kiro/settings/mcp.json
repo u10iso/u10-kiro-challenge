@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "open-meteo": {
+      "command": "npx",
+      "args": ["-y", "@cyanheads/open-meteo-mcp-server"],
+      "timeout": 30000
+    }
+  }
+}
