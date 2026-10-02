@@ -1,0 +1,15 @@
+{
+  "name": "default",
+  "hooks": [
+    {
+      "name": "run-tests-on-save",
+      "trigger": "postToolUse",
+      "matcher": "write",
+      "action": {
+        "type": "command",
+        "command": "/Users/m5p-u10/Documents/kiro-universitychallenge/.kiro/hooks/run-tests-on-save.sh"
+      },
+      "timeout": 60
+    }
+  ]
+}
