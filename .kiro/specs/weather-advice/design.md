@@ -8,58 +8,125 @@
 ┌─────────────────────────────────────────────────────────┐
 │  src/index.ts  (CLI entry point)                        │
 │                                                         │
-│  1. Call MCP tool: get_current_weather({ location })    │
-│  2. Parse WeatherData from MCP response                 │
-│  3. Call advise(weather) → string                       │
-│  4. console.log(advice)                                 │
+│  1. Call fetchWeather(location) → WeatherData           │
+│  2. Call advise(weather) → string                       │
+│  3. console.log(advice)                                 │
 └──────────────────┬──────────────────────────────────────┘
                    │ WeatherData
 ┌──────────────────▼──────────────────────────────────────┐
 │  src/advise.ts  (pure domain logic)                     │
 │                                                         │
-│  advise(weather: WeatherData): string                   │
-│  • No I/O, no side effects, deterministic               │
-│  • Returns ≤ 40 Japanese characters, no emoji           │
+│  wmoToCondition(code): string   — pure, no I/O          │
+│  advise(weather: WeatherData): string — pure, ≤40 chars │
 └─────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## MCP Server
+
+**Server command**: `npx -y @cyanheads/open-meteo-mcp-server` (stdio)
+
+Override via env vars:
+- `WEATHER_MCP_CMD` — executable (default: `npx`)
+- `WEATHER_MCP_ARGS` — comma-separated args (default: `-y,@cyanheads/open-meteo-mcp-server`)
+
+---
+
+## 2-Step MCP Call Flow
+
+### Step 1 — Location search
+
+```
+Tool    : openmeteo_search_locations
+Input   : { "name": "<location string>" }
+Extract : structuredContent.results[0].latitude
+          structuredContent.results[0].longitude
+```
+
+If `results` is empty or missing, throw a Japanese error and exit with code 1.
+
+### Step 2 — Forecast fetch
+
+```
+Tool  : openmeteo_get_forecast
+Input : {
+  "latitude": <number>,
+  "longitude": <number>,
+  "timezone": "auto",
+  "forecast_days": 1,
+  "current_variables": ["temperature_2m", "weather_code"],
+  "daily_variables": ["precipitation_probability_max"]
+}
+Extract:
+  temperature  → structuredContent.current.temperature_2m   (°C)
+  weatherCode  → structuredContent.current.weather_code     (WMO integer)
+  precipProb   → structuredContent.daily[0].precipitation_probability_max  (%)
+```
+
+**Always use `structuredContent`, not the text body.**
+
+If `temperature_2m` or `weather_code` is missing/null, throw a Japanese error — do not substitute a default value.
 
 ---
 
 ## Data Model
 
 ```typescript
-/** Minimal shape consumed by advise(). Sourced from MCP response. */
-interface WeatherData {
-  /** Human-readable condition label: e.g. "Rain", "Clear", "Clouds", "Snow" */
+/** Weather snapshot consumed by advise(). */
+export interface WeatherData {
+  /** Mapped condition string derived from WMO code, e.g. "Rain", "Clear". */
   condition: string;
-  /** Current temperature in degrees Celsius */
+  /** Current temperature in degrees Celsius. */
   tempCelsius: number;
+  /** Today's max precipitation probability in % (0–100). Optional. */
+  precipitationProbability?: number;
 }
 ```
 
-The MCP tool used is **`get_current_weather`** (OpenWeatherMap MCP or compatible).  
-The CLI passes a location (city name or lat/lon) and maps the response to `WeatherData`.
+---
+
+## WMO Code → Condition Mapping
+
+Implemented as pure function `wmoToCondition(code: number): string` in `src/advise.ts`.
+
+| WMO code range | Condition string |
+|---------------|-----------------|
+| 0             | `"Clear"`        |
+| 1, 2, 3       | `"Clouds"`       |
+| 45, 48        | `"Fog"`          |
+| 51–57         | `"Drizzle"`      |
+| 61–67         | `"Rain"`         |
+| 71–77         | `"Snow"`         |
+| 80–82         | `"Rain"` (showers) |
+| 85–86         | `"Snow"` (snow showers) |
+| 95–99         | `"Thunderstorm"` |
+| other         | `"Unknown"`      |
+
+The function must never throw for any integer input.
 
 ---
 
 ## `advise(weather: WeatherData): string` — Logic
 
-The function uses a rule table evaluated top-to-bottom; first match wins.
+Umbrella is triggered by **either**:
+- `condition` matches rain/drizzle/thunderstorm (case-insensitive), **or**
+- `precipitationProbability >= 60`
 
-| Priority | Condition | Advice fragment |
-|----------|-----------|-----------------|
-| 1 | rain-like AND temp < 10 | 「傘を持って、厚手のコートで防寒を。」 |
-| 2 | rain-like AND 10 ≤ temp < 20 | 「傘を忘れずに。上着もあると安心です。」 |
-| 3 | rain-like AND temp ≥ 20 | 「傘を持って出かけましょう。」 |
-| 4 | snow-like AND temp < 10 | 「防寒対策をしっかりして、足元に気をつけて。」 |
-| 5 | temp < 10 (clear/clouds) | 「厚手のコートが必要です。防寒を万全に。」 |
-| 6 | 10 ≤ temp < 20 | 「カーディガンか薄手のジャケットが快適です。」 |
-| 7 | temp ≥ 20 | 「軽装でも大丈夫な陽気です。」 |
+Rule table evaluated top-to-bottom; first match wins:
 
-**Rain-like**: condition contains any of `rain`, `drizzle`, `thunderstorm` (case-insensitive).  
-**Snow-like**: condition contains `snow` (case-insensitive).
+| Priority | Condition | Advice |
+|----------|-----------|--------|
+| 1 | umbrella AND temp < 10 | 「傘を持って、厚手のコートで防寒を。」 |
+| 2 | umbrella AND temp < 20 | 「傘を忘れずに。上着もあると安心です。」 |
+| 3 | umbrella | 「傘を持って出かけましょう。」 |
+| 4 | snow AND temp < 10 | 「防寒対策をしっかりして、足元に気をつけて。」 |
+| 5 | snow | 「雪です。防寒と足元に注意しましょう。」 |
+| 6 | temp < 10 | 「厚手のコートが必要です。防寒を万全に。」 |
+| 7 | temp < 20 | 「カーディガンか薄手のジャケットが快適です。」 |
+| 8 | catch-all | 「軽装でも大丈夫な陽気です。」 |
 
-All advice strings are pre-validated to be ≤ 40 chars and contain no emoji.
+All advice strings are pre-validated at module load to be ≤ 40 chars and emoji-free.
 
 ---
 
@@ -70,32 +137,12 @@ weather-advice-cli/
 ├── package.json
 ├── tsconfig.json
 ├── src/
-│   ├── index.ts          # CLI entry: MCP call → advise() → stdout
-│   ├── advise.ts         # Pure function + WeatherData type
-│   └── mcp-client.ts     # Thin wrapper: calls MCP tool, returns WeatherData
+│   ├── index.ts          # CLI entry: parseArgs → fetchWeather → advise → stdout
+│   ├── advise.ts         # wmoToCondition(), advise(), WeatherData
+│   └── mcp-client.ts     # 2-step MCP call, returns WeatherData
 └── test/
     └── advise.test.ts    # fast-check property-based tests
 ```
-
----
-
-## MCP Integration
-
-The CLI uses the **`@modelcontextprotocol/sdk`** client (stdio or SSE transport) to call the weather MCP server. The server is expected to expose:
-
-```
-Tool name : get_current_weather
-Input     : { location: string }
-Output    : { weather: string, temperature: number, ... }
-```
-
-The `mcp-client.ts` module:
-1. Spawns / connects to the MCP server process.
-2. Calls `get_current_weather` with the location.
-3. Maps the raw response to `WeatherData`.
-4. Disconnects and returns.
-
-Location defaults to `Tokyo` and can be overridden via `--location` CLI flag or `WEATHER_LOCATION` env var.
 
 ---
 
@@ -103,30 +150,34 @@ Location defaults to `Tokyo` and can be overridden via `--location` CLI flag or 
 
 | Scenario | Behaviour |
 |----------|-----------|
-| MCP server not found / timeout | Print Japanese error to stderr, exit code 1 |
-| Tool returns unexpected shape | Print Japanese error to stderr, exit code 1 |
-| advise() returns string > 40 chars | TypeScript compile-time unit test catches it; runtime assertion throws |
+| Location not found (empty results) | Japanese error to stderr, exit 1 |
+| MCP server not found / timeout | Japanese error to stderr, exit 1 |
+| `temperature_2m` missing | Japanese error to stderr, exit 1 |
+| `weather_code` missing | Japanese error to stderr, exit 1 |
+| `advise()` returns > 40 chars | Runtime assertion throws (programming bug) |
 
 ---
 
 ## Property-Based Test Design (fast-check)
 
 ```typescript
-// Property 1 — Rain → umbrella
+// Property 1 — Rain condition → umbrella
 fc.property(rainWeatherArb, (w) => advise(w).includes("傘"))
 
-// Property 2 — Lower temp → no lighter clothing than higher temp
-// (cold advice must not be dominated by warm-day phrasing)
-fc.property(coldWeatherArb, (w) => !isLightClothingAdvice(advise(w)))
+// Property 2 — precipitationProbability ≥ 60 → umbrella
+fc.property(highPrecipArb, (w) => advise(w).includes("傘"))
 
-// Property 3 — Length ≤ 40
+// Property 3 — Cold (< 10°C) → no light-clothing phrases
+fc.property(coldWeatherArb, (w) => !isLightClothing(advise(w)))
+
+// Property 4 — All outputs ≤ 40 chars
 fc.property(anyWeatherArb, (w) => [...advise(w)].length <= 40)
 
-// Property 4 — Determinism
+// Property 5 — Determinism
 fc.property(anyWeatherArb, (w) => advise(w) === advise(w))
-```
 
-Arbitraries:
-- `rainWeatherArb`: condition ∈ `["Rain","Drizzle","Thunderstorm"]`, temp ∈ [-10, 40]
-- `coldWeatherArb`: condition ∈ `["Clear","Clouds"]`, temp ∈ [-20, 9]
-- `anyWeatherArb`: condition ∈ all labels above, temp ∈ [-20, 45]
+// Property 6 — wmoToCondition never throws
+fc.property(fc.integer({ min: 0, max: 200 }), (code) => {
+  expect(() => wmoToCondition(code)).not.toThrow();
+})
+```

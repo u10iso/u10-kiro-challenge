@@ -16,6 +16,14 @@
 **WHEN** the retrieved weather condition includes rain (e.g., `Rain`, `Drizzle`, `Thunderstorm`),  
 **THE SYSTEM SHALL** include a reference to carrying an umbrella in the advice string.
 
+### FR-03b — Precipitation Probability Advice (Event-Driven)
+**WHEN** the precipitation probability for today is 60% or greater,  
+**THE SYSTEM SHALL** include umbrella guidance in the advice.
+
+### FR-03c — WMO Rain Code Advice (Event-Driven)
+**WHEN** the weather code indicates drizzle (51–57), rain (61–67), showers (80–82), or thunderstorm (95–99),  
+**THE SYSTEM SHALL** include umbrella guidance in the advice.
+
 ### FR-04 — Temperature-Aware Advice (State-Driven)
 **WHILE** the retrieved temperature is lower than 10 °C,  
 **THE SYSTEM SHALL** include a reference to warm clothing (e.g., coat, layers) in the advice string.
